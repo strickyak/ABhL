@@ -1,0 +1,43 @@
+; Brett's start on FORTH in OWL
+;
+; Arguments may have spaces,
+; so semicolons are required for comments.
+
+W	seta 0
+T	seta 0
+SP	seta 0
+RP	seta 0
+PC	seta 0
+I	seta 0
+
+next:	setb 0
+	ldh PC
+	ldl PC + 1
+	mv m, a
+	sta I
+	incw
+	mov m, a
+	sta I+1
+	incw
+	sth PC
+	stl PC+1
+; jump to I
+	ldh I
+	ldl I+1
+	seta 1
+	setb 0
+	bnz
+
+drop:
+	ldh SP ; inc SP
+	ldl SP+1 ; inc SP
+	incw
+	incw
+	sth SP
+	stl SP+1
+
+	seta 1 ; Jump to next
+	setb 0
+	seth next
+	setl next+1
+	bnz

@@ -124,7 +124,7 @@ func (vm *Vm) IPL(vec []byte) {
 func (vm *Vm) Execute() bool {
 	t := vm.t
 	switch t >> 6 {
-	case 0x00:
+	case 0:
 		r := 3 & t
 		switch t & 0x3C {
 		case 0x00: // undefined
@@ -139,11 +139,11 @@ func (vm *Vm) Execute() bool {
 				vm.a++
 				Log("    INCA becomes %x", vm.a)
 			case 1:
-				vm.b, vm.h, vm.l = BhlSplit(vm.W() + 1)
-				Log("    INCW becomes %x", vm.W())
-			case 2:
 				vm.a--
 				Log("    DECA becomes %x", vm.a)
+			case 2:
+				vm.b, vm.h, vm.l = BhlSplit(vm.W() + 1)
+				Log("    INCW becomes %x", vm.W())
 			case 3:
 				vm.b, vm.h, vm.l = BhlSplit(vm.W() - 1)
 				Log("    DECW becomes %x", vm.W())
@@ -161,20 +161,20 @@ func (vm *Vm) Execute() bool {
 		default:
 			return false // undefined instructions
 		}
-	case 0x01: // MV
+	case 1: // MV
 		from, to := 7&(t>>3), 7&t
 		val := vm.GetReg(from)
 		Log("    MV value $%x from %s to %s", val, RegNames[from], RegNames[to])
 		vm.PutReg(to, val)
-	case 0x10: // LDr
+	case 2: // LDr
 		to, addr := 3&(t>>4), 15&t
 		val := vm.ram[addr]
-		Log("    LD%x value $%x from addr $%x", RegNames[to], val, addr)
+		Log("    LD%s value $%x from addr $%x", RegNames[to], val, addr)
 		vm.PutReg(to, val)
-	case 0x11: // STr
+	case 3: // STr
 		from, addr := 3&(t>>4), 15&t
 		val := vm.GetReg(from)
-		Log("    ST%x value $%x to addr $%x", RegNames[from], val, addr)
+		Log("    ST%s value $%x to addr $%x", RegNames[from], val, addr)
 		vm.ram[addr] = val
 	default:
 		panic("bad t")

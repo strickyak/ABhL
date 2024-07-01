@@ -2,6 +2,7 @@ package ABhL // pronounced "owl"
 
 import (
 	"bufio"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -154,6 +155,74 @@ func (mod *Mod) GetArgReg(row *Row, i int) uint {
 	}
 }
 
+func (mod *Mod) EvalPrim(row *Row, s string) uint {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		log.Panicf("Cannot parse empty prim in row: %#v", row)
+	}
+	var value int64
+	var err error
+	s0 := s[0]
+	if s0 == '$' {
+		value, err = strconv.ParseInt(s[1:], 16, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as hex int: %#v", s, row)
+		}
+	} else if '0' <= s0 && s0 <= '9' {
+		value, err = strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as decimal int: %#v", s, row)
+		}
+	} else {
+		lbl, ok := mod.labels[s]
+		if !ok {
+			log.Panicf("Unknown label %q in row: %#v", s, row)
+		}
+		value = int64(lbl.addr)
+	}
+	return 0xFFFFFF & uint(value)
+}
+
+var SumPattern = regexp.MustCompile(
+	"^[[:space:]]*" + //
+		"([$]?[[:word:]]+)" + // group 1: initial Prim
+		"[[:space:]]*" + //
+		"([-+]?)" + // group 2: Plus or Minus or Empty
+		"[[:space:]]*" + //
+		"([$]?[[:word:]]+)?" + // group 3: next Prim
+		"[[:space:]]*" + //
+		"(.*)" + // group 4: all the rest
+		"$")
+
+func (mod *Mod) EvalString(row *Row, s string) uint {
+	m := SumPattern.FindStringSubmatch(s)
+	if m == nil {
+		log.Panicf("Eval cannot recognize string %q in row: %#v", s, row)
+	}
+	for len(m) < 5 {
+		m = append(m, "")
+	}
+	left, op, right, rest := m[1], m[2], m[3], m[4]
+	result := mod.EvalPrim(row, left)
+
+	switch op {
+	case "":
+		if rest != "" {
+			log.Panic("Syntax error in expression %q in row: %#v", s, row)
+		}
+	case "+":
+		rv := mod.EvalPrim(row, right)
+		t := fmt.Sprintf("$%x %s", result+rv, rest)
+		result = mod.EvalString(row, t)
+	case "-":
+		rv := mod.EvalPrim(row, right)
+		t := fmt.Sprintf("$%x %s", result-rv, rest)
+		result = mod.EvalString(row, t)
+	}
+
+	return result & 0xFFFFFF
+}
+
 func (mod *Mod) EvalArg(row *Row, i int) uint {
 	if len(row.args) < i+1 {
 		log.Panicf("not enough args: %d: %#v", i, row)
@@ -162,17 +231,7 @@ func (mod *Mod) EvalArg(row *Row, i int) uint {
 	if argStr == "" {
 		log.Panicf("empty arg %d: %#v", i, row)
 	}
-	var value int64
-	var err error
-	if strings.HasPrefix(argStr, "$") {
-		value, err = strconv.ParseInt(argStr[1:], 16, 64)
-	} else {
-		value, err = strconv.ParseInt(argStr, 10, 64)
-	}
-	if err != nil {
-		log.Panicf("cannot parse arg %d as int: %#v", i, row)
-	}
-	return 0xFFFFFF & uint(value)
+	return mod.EvalString(row, argStr)
 }
 
 var LinePattern = regexp.MustCompile(
