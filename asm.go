@@ -20,11 +20,17 @@ type AddrData struct {
 // Mod is an assembly module
 type Mod struct {
 	rows []*Row
-	// ram     [RamSize]byte
+
 	labels  map[string]*Label
+	macros  map[string]*Macro
 	listing io.Writer
 
 	generated []AddrData
+}
+
+type Macro struct {
+	formals []string
+	rows    []*Row
 }
 
 // Row is parsed info about an assembly line
@@ -40,6 +46,7 @@ type Row struct {
 	addr   uint
 	final  bool // is addr final?
 	// addrX  *Expr  // is addr computed?
+	where string
 }
 
 type Instr struct {
@@ -301,8 +308,6 @@ func LogRows(mod *Mod) {
 }
 
 // PassThree generates code.
-// MACROs are not implemented yet.
-// ORGs are not implemented yet.
 func PassThree(mod *Mod) {
 	for i, row := range mod.rows {
 		if row.opcode == "" {
@@ -325,8 +330,6 @@ func PassThree(mod *Mod) {
 }
 
 // PassTwo assigns addresses.
-// MACROs are not implemented yet.
-// ORGs are not implemented yet.
 func PassTwo(mod *Mod) {
 	addr := uint(0)
 	for _, row := range mod.rows {
@@ -383,7 +386,6 @@ func PassTwo(mod *Mod) {
 }
 
 // PassOne creates labels and looks up instructions by opcode.
-// MACROs are not implemented yet.
 func PassOne(mod *Mod) {
 	for i, row := range mod.rows {
 		if row.label != "" {
@@ -399,6 +401,119 @@ func PassOne(mod *Mod) {
 		row.instr = instr
 		row.length = instr.length
 	}
+}
+
+// MacroPassTwo expands macros.
+func MacroPassTwo(mod *Mod) {
+	serial := 1
+	unique := fmt.Sprintf("B%d__", serial)
+
+	var newRows []*Row
+	for _, row := range mod.rows {
+		// Totally empty lines get a new Serial.
+		if row.label == "" && row.opcode == "" && row.comment == "" {
+			serial++
+			unique = fmt.Sprintf("B%d__", serial)
+		}
+
+		macro, ok := mod.macros[row.opcode]
+		if ok {
+			saved := unique
+			serial++
+			unique = fmt.Sprintf("M%d__", serial)
+
+			newRows = append(newRows, &Row{
+				comment: fmt.Sprintf("; Expanded macro %s ( %s )",
+					row.opcode,
+					strings.Join(row.args, ", ")),
+			})
+			for _, innerRow := range macro.rows {
+				// Append normal non-macro rows to newRows.
+				var innerCopy Row = *innerRow // struct assignment makes a copy
+
+				for i, formal := range macro.formals {
+					param := row.args[i]
+					innerCopy.label = strings.Replace(innerCopy.label, formal, param, -1)
+					innerCopy.label = strings.Replace(innerCopy.label, "@", unique, -1)
+					innerCopy.opcode = strings.Replace(innerCopy.opcode, formal, param, -1)
+					var newArgs []string
+					for _, arg := range innerCopy.args {
+						arg = strings.Replace(arg, formal, param, -1)
+						arg = strings.Replace(arg, "@", unique, -1)
+						newArgs = append(newArgs, arg)
+					}
+					innerCopy.args = newArgs
+				}
+
+				newRows = append(newRows, &innerCopy)
+			}
+
+			newRows = append(newRows, &Row{
+				comment: "; End Expansion",
+			})
+
+			unique = saved
+		} else {
+			// Append normal non-macro rows to newRows.
+			row.label = strings.Replace(row.label, "@", unique, -1)
+			var newArgs []string
+			for _, arg := range row.args {
+				newArgs = append(newArgs, strings.Replace(arg, "@", unique, -1))
+			}
+			row.args = newArgs
+			newRows = append(newRows, row)
+		}
+	}
+	mod.rows = newRows // with the macros expanded
+}
+
+// MacroPassOne creates macros.
+func MacroPassOne(mod *Mod) {
+	var macro *Macro
+
+	var newRows []*Row
+	for _, row := range mod.rows {
+		if macro == nil {
+			// Outside of a macro definition
+			if row.opcode == "macro" {
+				// Starts a macro definition
+				if row.label == "" {
+					log.Panicf("Cannot define a macro without a label: %#v", row)
+				}
+				macro = &Macro{
+					formals: row.args,
+				}
+				mod.macros[strings.ToLower(row.label)] = macro
+
+				newRows = append(newRows, &Row{
+					comment: fmt.Sprintf("; MACRO DEFINITION"),
+				})
+				newRows = append(newRows, &Row{
+					comment: fmt.Sprintf("; %12s %12s  %-20s %s",
+						row.label, row.opcode,
+						strings.Join(row.args, ", "), row.comment),
+				})
+			} else {
+				// Append normal non-macro rows to newRows.
+				newRows = append(newRows, row)
+			}
+		} else {
+			// defining a macro
+			if row.opcode == "endmacro" {
+				// ends a macro definition
+				macro = nil
+			} else {
+				// another line in the macro
+				macro.rows = append(macro.rows, row)
+			}
+			newRows = append(newRows, &Row{
+				comment: fmt.Sprintf("; %12s %12s %-20s %s",
+					row.label, row.opcode,
+					strings.Join(row.args, ", "), row.comment),
+			})
+		}
+	}
+	mod.rows = newRows // with the macros definitions removed.
 }
 
 func SplitOnCommaAndTrim(args string) (vec []string) {
@@ -429,15 +544,16 @@ func ParseLine(line string) *Row {
 	// Log("      Row -> %#v", *row)
 	return row
 }
-func ParseLines(lines []string) *Mod {
+func ParseLines(lines []string, wheres []string) *Mod {
 	mod := &Mod{
 		labels:  make(map[string]*Label),
+		macros:  make(map[string]*Macro),
 		listing: os.Stdout,
 	}
-	for _, line := range lines {
+	for i, line := range lines {
 		row := ParseLine(line)
+		row.where = wheres[i]
 		mod.rows = append(mod.rows, row)
-
 	}
 	return mod
 }

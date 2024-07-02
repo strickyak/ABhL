@@ -64,3 +64,53 @@ drop:
 	seth next
 	setl next+1
 	bnz
+
+; Local labels with initial @.
+; Totally empty lines (not even a comment) separate local blocks.
+block1	seta 0
+@x	setb 1
+	seth 2
+	setl @x
+
+block2	seta 0
+@x	setb 1
+	seth 2
+	setl @x
+
+block3	seta 0
+@x	setb 1
+	seth 2
+	setl @x
+	; same block
+	setl @x
+
+
+TryMacros:
+
+SET_W	macro _b,_h,_l
+	setb _b
+	seth _h
+	setl _l
+	endmacro
+
+	seta 100
+	SET_W 1,2,3
+	seta 200
+	SET_W 2,4,6
+	seta 300
+
+; A macro expansion is a block of its own.
+LOOP	macro
+	setb 0
+@here
+	seth 0
+	setl @here    ; works if on the same page
+	seta 1
+	bnz
+	endmacro
+
+	LOOP
+	LOOP
+	LOOP
+
+; END
