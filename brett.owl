@@ -2,21 +2,44 @@
 ;
 ; Arguments may have spaces,
 ; so semicolons are required for comments.
+;
+; We now have these pesudo-ops: org rmb equ fcw fcb
+; We have 3 ways of writing numeric args:
+;    decimal, $hex, 'c  (for one character c)
+; The only arithmetic supported is + and -
+; TODO: full arithmetic evaluator.
 
-W	seta 0
-T	seta 0
-SP	seta 0
-RP	seta 0
-PC	seta 0
-I	seta 0
+	org $00
 
+W	rmb 2   ; working reg
+T	rmb 2   ; Top Of Stack
+SP	rmb 2   ; data stack pointer
+RP	rmb 2   ; return stack pointer
+PC	rmb 2   ; Forth PC
+I	rmb 4   ; Fetched Instruction
+
+	org $20
+
+; just testing fcw and fcb
+nando	equ $1234
+	fcw nando
+	fcb 'H
+	fcb 'E
+	fcb 'L
+	fcb 'L
+	fcb 'O
+	fcb 0
+
+	org $42
+
+start           ; the `start` label is where IPL jumps to.
 next:	setb 0
 	ldh PC
 	ldl PC + 1
 	mv m, a
 	sta I
 	incw
-	mov m, a
+	mv m, a
 	sta I+1
 	incw
 	sth PC

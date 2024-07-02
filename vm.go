@@ -12,10 +12,10 @@ type Port interface {
 }
 
 type Vm struct {
-	a, b, h, l, m, t byte
-	pc               uint
-	E, F, G          Port
-	ram              [RamSize]byte
+	a, b, h, l, m, t, imm byte
+	pc                    uint
+	E, F, G               Port
+	ram                   [RamSize]byte
 }
 
 var RegNames = []string{"A", "B", "H", "L", "Mem", "PortE", "PortF", "PortG"}
@@ -92,8 +92,9 @@ func (vm *Vm) Steps(n int) bool {
 	for i := 0; i < n; i++ {
 		vm.t = vm.ram[vm.pc]
 		vm.m = vm.ram[vm.W()]
-		Log("Step %x. pc=%06x t=%02x", i, vm.pc, vm.t)
 		vm.pc++
+		vm.imm = vm.ram[vm.pc]
+		Log("Step %x. pc=%06x t=%02x m=%02x imm=%02x", i, vm.pc-1, vm.t, vm.m, vm.imm)
 		ok := vm.Execute()
 		Log(".....%x: pc=%06x a=%02x w=%06x mem=% 3x ...", i, vm.pc, vm.a, vm.W(), vm.ram[:16])
 		if !ok {
@@ -111,7 +112,8 @@ func (vm *Vm) IPL(vec []byte) {
 		i := n - len(vec)
 		vm.t = vec[0]
 		vm.m = vec[1]
-		Log("IPL %x. pc=%06x t=%02x", i, vm.pc, vm.t)
+		vm.imm = vec[1]
+		Log("IPL %x. pc=%06x t=%02x m=imm=%02x", i, vm.pc, vm.t, vm.m)
 		vec = vec[2:] // In IPL mode, always consume a fetch and an execute value.
 		ok := vm.Execute()
 		Log(".....%x: pc=%06x a=%02x w=%06x mem=% 3x ...", i, vm.pc, vm.a, vm.W(), vm.ram[:16])
@@ -130,8 +132,8 @@ func (vm *Vm) Execute() bool {
 		case 0x00: // undefined
 			return false
 		case 0x04: // SETr
-			Log("    SET%s immediate $%x", RegNames[r], vm.m)
-			vm.PutReg(t&3, vm.m)
+			Log("    SET%s immediate $%x", RegNames[r], vm.imm)
+			vm.PutReg(t&3, vm.imm)
 			vm.pc++
 		case 0x08: // Inc/Dec
 			switch 3 & t {
@@ -153,7 +155,7 @@ func (vm *Vm) Execute() bool {
 				return false // undefined instructions
 			}
 			if vm.a == 0 {
-				Log("    BNZ (not taken, to %x)", vm.W())
+				Log("    BNZ (not taken)")
 			} else {
 				Log("    BNZ ... branching to %x", vm.W())
 				vm.pc = vm.W()

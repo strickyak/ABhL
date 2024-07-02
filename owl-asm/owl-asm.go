@@ -23,8 +23,8 @@ func main() {
 	OWL.PassTwo(mod)
 	OWL.PassThree(mod)
 
-	OWL.LogRows(mod)
-	OWL.LogRam(mod)
+	// OWL.LogRows(mod)
+	// OWL.LogRam(mod)
 
 	if *O != "" {
 		OWL.WriteIPL(mod, *O)

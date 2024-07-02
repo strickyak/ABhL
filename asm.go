@@ -3,6 +3,7 @@ package ABhL // pronounced "owl"
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
@@ -11,11 +12,19 @@ import (
 	"strings"
 )
 
+type AddrData struct {
+	addr uint
+	data byte
+}
+
 // Mod is an assembly module
 type Mod struct {
-	rows   []*Row
-	ram    [RamSize]byte
-	labels map[string]*Label
+	rows []*Row
+	// ram     [RamSize]byte
+	labels  map[string]*Label
+	listing io.Writer
+
+	generated []AddrData
 }
 
 // Row is parsed info about an assembly line
@@ -46,81 +55,120 @@ type Label struct {
 	// addrX  *Expr  // is addr computed?
 }
 
-func DoMv(mod *Mod, i int) {
+func (mod *Mod) Gen(row *Row, addr uint, value byte) {
+	mod.generated = append(mod.generated, AddrData{addr, value})
+	mod.ShowGen(row, addr, value)
+}
+
+func (mod *Mod) ShowGen(row *Row, addr uint, value byte) {
+	if mod.listing != nil {
+		if row == nil {
+			fmt.Fprintf(mod.listing, "% 6x : %2x\n", addr, value)
+		} else {
+			fmt.Fprintf(mod.listing, "% 6x : %2x : %12s %12s  %-24s %s\n", addr, value, row.label, row.opcode, strings.Join(row.args, ", "), row.comment)
+		}
+
+	}
+}
+func (mod *Mod) ShowGenPseudo(row *Row, addr uint) {
+	if mod.listing != nil {
+		fmt.Fprintf(mod.listing, "% 6x : %2s : %12s %12s  %-24s %s\n", addr, "", row.label, row.opcode, strings.Join(row.args, ", "), row.comment)
+	}
 }
 
 var Instructions = map[string]*Instr{
+	"rmb": {0, func(mod *Mod, row *Row) {
+		// nothing generated
+		mod.ShowGenPseudo(row, row.addr)
+	}},
+	"org": {0, func(mod *Mod, row *Row) {
+		// nothing generated
+		mod.ShowGenPseudo(row, row.addr)
+	}},
+	"equ": {0, func(mod *Mod, row *Row) {
+		// nothing generated
+		mod.ShowGenPseudo(row, row.addr)
+	}},
+	"fcw": {2, func(mod *Mod, row *Row) {
+		value := mod.EvalArg(row, 0)
+		mod.Gen(row, row.addr, byte(value>>8))
+		mod.Gen(nil, row.addr+1, byte(value))
+	}},
+	"fcb": {1, func(mod *Mod, row *Row) {
+		value := mod.EvalArg(row, 0)
+		mod.Gen(row, row.addr, byte(value))
+	}},
 	"mv": {1, func(mod *Mod, row *Row) {
 		from := mod.GetArgReg(row, 0)
 		to := mod.GetArgReg(row, 1)
-		mod.ram[row.addr] = 0x40 + byte((from<<3)+to)
+		mod.Gen(row, row.addr, 0x40+byte((from<<3)+to))
 	}},
 	"lda": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0x80 + byte(15&value)
+		mod.Gen(row, row.addr, 0x80+byte(15&value))
 	}},
 	"ldb": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0x90 + byte(15&value)
+		mod.Gen(row, row.addr, 0x90+byte(15&value))
 	}},
 	"ldh": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xA0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xA0+byte(15&value))
 	}},
 	"ldl": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xB0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xB0+byte(15&value))
 	}},
 	"sta": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xC0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xC0+byte(15&value))
 	}},
 	"stb": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xD0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xD0+byte(15&value))
 	}},
 	"sth": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xE0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xE0+byte(15&value))
 	}},
 	"stl": {1, func(mod *Mod, row *Row) {
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr] = 0xF0 + byte(15&value)
+		mod.Gen(row, row.addr, 0xF0+byte(15&value))
 	}},
 	"seta": {2, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x04
+		mod.Gen(row, row.addr, 0x04)
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr+1] = byte(value)
+		mod.Gen(nil, row.addr+1, byte(value))
 	}},
 	"setb": {2, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x05
+		mod.Gen(row, row.addr, 0x05)
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr+1] = byte(value)
+		mod.Gen(nil, row.addr+1, byte(value))
 	}},
 	"seth": {2, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x06
+		mod.Gen(row, row.addr, 0x06)
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr+1] = byte(value)
+		mod.Gen(nil, row.addr+1, byte(value))
 	}},
 	"setl": {2, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x07
+		mod.Gen(row, row.addr, 0x07)
 		value := mod.EvalArg(row, 0)
-		mod.ram[row.addr+1] = byte(value)
+		mod.Gen(nil, row.addr+1, byte(value))
 	}},
 	"inca": {1, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x08
+		mod.Gen(row, row.addr, 0x08)
 	}},
 	"deca": {1, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x09
+		mod.Gen(row, row.addr, 0x09)
 	}},
 	"incw": {1, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x0A
+		mod.Gen(row, row.addr, 0x0A)
 	}},
 	"decw": {1, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x0B
+		mod.Gen(row, row.addr, 0x0B)
 	}},
 	"bnz": {1, func(mod *Mod, row *Row) {
-		mod.ram[row.addr] = 0x0C
+		mod.Gen(row, row.addr, 0x0C)
 	}},
 }
 
@@ -168,6 +216,8 @@ func (mod *Mod) EvalPrim(row *Row, s string) uint {
 		if err != nil {
 			log.Panicf("cannot parse %q as hex int: %#v", s, row)
 		}
+	} else if s0 == '\'' {
+		value = int64(s[1])
 	} else if '0' <= s0 && s0 <= '9' {
 		value, err = strconv.ParseInt(s, 10, 64)
 		if err != nil {
@@ -185,7 +235,7 @@ func (mod *Mod) EvalPrim(row *Row, s string) uint {
 
 var SumPattern = regexp.MustCompile(
 	"^[[:space:]]*" + //
-		"([$]?[[:word:]]+)" + // group 1: initial Prim
+		"([$]?[[:word:]]+|'.)" + // group 1: initial Prim
 		"[[:space:]]*" + //
 		"([-+]?)" + // group 2: Plus or Minus or Empty
 		"[[:space:]]*" + //
@@ -249,16 +299,6 @@ func LogRows(mod *Mod) {
 		log.Printf("ROW[%4d]: %#v", i, *row)
 	}
 }
-func LogRam(mod *Mod) {
-	// Cannot use a for...range loop, or we get error:
-	// stack frame too large (>1GB): 1024 MB locals + 0 MB args
-	for i := 0; i < RamSize; i++ {
-		b := mod.ram[i]
-		if b != 0 {
-			log.Printf("ram[%6x]: %02x", i, b)
-		}
-	}
-}
 
 // PassThree generates code.
 // MACROs are not implemented yet.
@@ -266,6 +306,13 @@ func LogRam(mod *Mod) {
 func PassThree(mod *Mod) {
 	for i, row := range mod.rows {
 		if row.opcode == "" {
+			if mod.listing != nil {
+				if row.label == "" {
+					fmt.Fprintf(mod.listing, "%6s   %2s   %12s %s\n", "", "", "", row.comment)
+				} else {
+					fmt.Fprintf(mod.listing, "% 6x   %2s   %12s %s\n", row.addr, "", row.label, row.comment)
+				}
+			}
 			continue
 		}
 		if !row.final {
@@ -283,13 +330,55 @@ func PassThree(mod *Mod) {
 func PassTwo(mod *Mod) {
 	addr := uint(0)
 	for _, row := range mod.rows {
-		row.addr = addr
-		row.final = true // addr is final
-		if row.label != "" {
-			lab := mod.labels[row.label]
-			lab.addr = addr
+		if row.length == 0 && row.opcode != "" {
+			// Special Cases: ORG, RMB...
+			if row.opcode == "org" {
+				if len(row.args) < 1 {
+					log.Panicf("Pseudo-opcode ORG needs an argument, in row: %#v", row)
+				}
+				addr = mod.EvalPrim(row, row.args[0])
+				row.addr = addr
+				row.final = true // addr is final
+				if row.label != "" {
+					lab := mod.labels[row.label]
+					lab.addr = addr
+				}
+			} else if row.opcode == "rmb" {
+				if len(row.args) < 1 {
+					log.Panicf("Pseudo-opcode RMB needs an argument, in row: %#v", row)
+				}
+				row.length = mod.EvalPrim(row, row.args[0])
+				row.addr = addr
+				row.final = true // addr is final
+				if row.label != "" {
+					lab := mod.labels[row.label]
+					lab.addr = addr
+				}
+				addr += row.length
+			} else if row.opcode == "equ" {
+				if len(row.args) < 1 {
+					log.Panicf("Pseudo-opcode EQU needs an argument, in row: %#v", row)
+				}
+				row.addr = mod.EvalPrim(row, row.args[0])
+				row.final = true // addr is final
+				if row.label != "" {
+					lab := mod.labels[row.label]
+					lab.addr = row.addr
+				}
+			} else {
+				log.Panicf("Uknown pseudo-opcode %q has 0 length, in row: $#v", row.opcode, row)
+			}
+		} else {
+			// Normal fixed-length instructions
+			// and non-generating lines (like just a label or comment)
+			row.addr = addr
+			row.final = true // addr is final
+			if row.label != "" {
+				lab := mod.labels[row.label]
+				lab.addr = addr
+			}
+			addr += row.length
 		}
-		addr += row.length
 	}
 }
 
@@ -312,6 +401,13 @@ func PassOne(mod *Mod) {
 	}
 }
 
+func SplitOnCommaAndTrim(args string) (vec []string) {
+	for _, a := range strings.Split(args, ",") {
+		vec = append(vec, strings.TrimSpace(a))
+	}
+	return
+}
+
 func ParseLine(line string) *Row {
 	line = strings.TrimRight(line, "\r\n")
 	m := LinePattern.FindStringSubmatch(line)
@@ -322,20 +418,21 @@ func ParseLine(line string) *Row {
 		m = append(m, "")
 	}
 	label, opcode, args, comment := m[1], m[2], m[3], m[4]
-	Log("Parsed (%q, %q, %q, %q) <- %q", label, opcode, args, comment, line)
+	// Log("Parsed (%q, %q, %q, %q) <- %q", label, opcode, args, comment, line)
 
 	row := &Row{
 		label:   label,
 		opcode:  strings.ToLower(opcode),
-		args:    strings.Split(args, ","),
+		args:    SplitOnCommaAndTrim(args),
 		comment: comment,
 	}
-	Log("      Row -> %#v", *row)
+	// Log("      Row -> %#v", *row)
 	return row
 }
 func ParseLines(lines []string) *Mod {
 	mod := &Mod{
-		labels: make(map[string]*Label),
+		labels:  make(map[string]*Label),
+		listing: os.Stdout,
 	}
 	for _, line := range lines {
 		row := ParseLine(line)
@@ -363,27 +460,54 @@ func SlurpTextFile(filename string) (lines []string) {
 	return
 }
 
-func CreateIPL(mod *Mod, start uint) []byte {
+func CreateIPL(mod *Mod) []byte {
 	var ipl []byte
-	for i := uint(0); i < RamSize; i++ {
-		a := mod.ram[i]
-		if a != 0 {
-			b, h, l := BhlSplit(i)
+	current := uint(0xFFFFFFFF) // will not match any addr
+
+	for _, pair := range mod.generated {
+		if pair.addr == current {
+			ipl = append(ipl, 0x0A /*incw*/, 0)
+		} else {
+			b, h, l := BhlSplit(pair.addr)
 			ipl = append(ipl,
-				0x04 /*seta*/, a,
 				0x05 /*setb*/, b,
 				0x06 /*seth*/, h,
-				0x07 /*setl*/, l,
-				0x44 /*mv a,m*/, 0,
-				0x44 /*mv a,m*/, 0, // do it 4 times,
-				0x44 /*mv a,m*/, 0, // just so "hd ipl" looks prettier.
-				0x44 /*mv a,m*/, 0)
+				0x07 /*setl*/, l)
 		}
+		ipl = append(ipl,
+			0x04 /*seta*/, pair.data,
+			0x44 /*mv a,m*/, 0)
+		current = pair.addr + 1
 	}
+
+	//if false {
+	//	for i := uint(0); i < RamSize; i++ {
+	//		a := mod.ram[i]
+	//		if a != 0 {
+	//			b, h, l := BhlSplit(i)
+	//			ipl = append(ipl,
+	//				0x04 /*seta*/, a,
+	//				0x05 /*setb*/, b,
+	//				0x06 /*seth*/, h,
+	//				0x07 /*setl*/, l,
+	//				0x44 /*mv a,m*/, 0,
+	//				0x44 /*mv a,m*/, 0, // do it 4 times,
+	//				0x44 /*mv a,m*/, 0, // just so "hd ipl" looks prettier.
+	//				0x44 /*mv a,m*/, 0)
+	//		}
+	//	}
+	//}
+
+	start := uint(0)
+	start_label, ok := mod.labels["start"]
+	if ok {
+		start = start_label.addr
+	}
+
 	b, h, l := BhlSplit(start)
 	ipl = append(ipl,
 		0x04 /*seta*/, 1, // enable jump
-		0x05 /*setb*/, b,
+		0x05 /*setb*/, b, // start address
 		0x06 /*seth*/, h,
 		0x07 /*setl*/, l,
 		0x0C /*bnz*/, 0,
@@ -394,7 +518,7 @@ func CreateIPL(mod *Mod, start uint) []byte {
 }
 
 func WriteIPL(mod *Mod, filename string) {
-	err := ioutil.WriteFile(filename, CreateIPL(mod, 0), 0644)
+	err := ioutil.WriteFile(filename, CreateIPL(mod), 0644)
 	if err != nil {
 		log.Panicf("Error writing IPL file %q: %v", filename, err)
 	}
