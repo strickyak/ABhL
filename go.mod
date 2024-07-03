@@ -1,3 +1,3 @@
 module github.com/strickyak/ABhL
 
-go 1.18.0
+go 1.18

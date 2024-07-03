@@ -84,6 +84,14 @@ func (mod *Mod) ShowGenPseudo(row *Row, addr uint) {
 }
 
 var Instructions = map[string]*Instr{
+	"assert": {0, func(mod *Mod, row *Row) {
+		cond := mod.EvalArg(row, 0)
+		if cond == 0 {
+			log.Panicf("Assert fails in row %#v", row)
+		}
+		// nothing generated
+		mod.ShowGenPseudo(row, row.addr)
+	}},
 	"rmb": {0, func(mod *Mod, row *Row) {
 		// nothing generated
 		mod.ShowGenPseudo(row, row.addr)
@@ -210,74 +218,239 @@ func (mod *Mod) GetArgReg(row *Row, i int) uint {
 	}
 }
 
-func (mod *Mod) EvalPrim(row *Row, s string) uint {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		log.Panicf("Cannot parse empty prim in row: %#v", row)
+var Lexers = map[int]*regexp.Regexp{
+	PRIM:  regexp.MustCompile(`^[[:space:]]*([$]?[[:word:]]+|'.')(.*)$`),
+	BINOP: regexp.MustCompile(`^[[:space:]]*([-+*/%^|&]|<<|>>|==|!=|<=|>=|<|>)(.*)$`),
+	OPEN:  regexp.MustCompile(`^[[:space:]]*([(])(.*)$`),
+	CLOSE: regexp.MustCompile(`^[[:space:]]*([)])(.*)$`),
+	COLON: regexp.MustCompile(`^[[:space:]]*([:])(.*)$`),
+	END:   regexp.MustCompile(`^[[:space:]]*()()$`),
+}
+
+type Evaluator struct {
+	mod    *Mod
+	row    *Row
+	orig   string
+	remain string
+	tok    string
+	typ    int
+}
+
+const (
+	PRIM = iota
+	BINOP
+	OPEN
+	CLOSE
+	COLON
+	END
+)
+
+func (ev *Evaluator) Next() {
+	for typ, pattern := range Lexers {
+		m := pattern.FindStringSubmatch(ev.remain)
+		if m != nil {
+			ev.typ = typ
+			ev.tok = m[1]
+			ev.remain = m[2]
+			return
+		}
 	}
+	ev.Fail()
+}
+
+func (ev *Evaluator) EvaluatePrim() uint {
+	s := ev.tok
+	ev.Next()
+
 	var value int64
 	var err error
 	s0 := s[0]
 	if s0 == '$' {
 		value, err = strconv.ParseInt(s[1:], 16, 64)
 		if err != nil {
-			log.Panicf("cannot parse %q as hex int: %#v", s, row)
+			log.Panicf("cannot parse %q as hex int: %#v", s, ev.row)
+		}
+	} else if strings.HasPrefix(s, "0x") {
+		value, err = strconv.ParseInt(s[2:], 16, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as hex int: %#v", s, ev.row)
+		}
+	} else if strings.HasPrefix(s, "0o") {
+		value, err = strconv.ParseInt(s[2:], 8, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as octal int: %#v", s, ev.row)
+		}
+	} else if strings.HasPrefix(s, "0b") {
+		value, err = strconv.ParseInt(s[2:], 2, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as binary int: %#v", s, ev.row)
+		}
+	} else if '0' == s0 {
+		value, err = strconv.ParseInt(s, 8, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as octal int: %#v", s, ev.row)
+		}
+	} else if '1' <= s0 && s0 <= '9' {
+		value, err = strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			log.Panicf("cannot parse %q as decimal int: %#v", s, ev.row)
 		}
 	} else if s0 == '\'' {
 		value = int64(s[1])
-	} else if '0' <= s0 && s0 <= '9' {
-		value, err = strconv.ParseInt(s, 10, 64)
-		if err != nil {
-			log.Panicf("cannot parse %q as decimal int: %#v", s, row)
-		}
 	} else {
-		lbl, ok := mod.labels[s]
-		if !ok {
-			log.Panicf("Unknown label %q in row: %#v", s, row)
+		if ev.typ == OPEN {
+			// Function call syntax.
+			ev.Next()
+			args := []uint{ev.EvaluateExpr()}
+			for ev.typ == COLON {
+				ev.Next()
+				args = append(args, ev.EvaluateExpr())
+			}
+			if ev.typ != CLOSE {
+				panic(ev.Fail())
+			}
+			ev.Next()
+
+			checkNumArgs := func(n int) {
+				if len(args) != n {
+					log.Panicf("Function %q expected %d args, but got %d args, (args must be separated by colons) in row: %#v", s, n, len(args), ev.row)
+				}
+			}
+
+			switch strings.ToLower(s) {
+			case "b":
+				checkNumArgs(1)
+				value = int64(0xFF & (args[0] >> 16))
+			case "h":
+				checkNumArgs(1)
+				value = int64(0xFF & (args[0] >> 8))
+			case "l":
+				checkNumArgs(1)
+				value = int64(0xFF & args[0])
+			case "hl":
+				checkNumArgs(1)
+				value = int64(0xFFFF & args[0])
+			case "w":
+				checkNumArgs(3)
+				value = int64(((0xFF & args[0]) << 16) | ((0xFF & args[1]) << 8) | (0xFF & args[2]))
+			default:
+				log.Panicf("Unknown function called in %q, in row: %#v", s, ev.row)
+			}
+		} else {
+			// Must be a label.
+			lbl, ok := ev.mod.labels[s]
+			if !ok {
+				log.Panicf("Unknown label %q in row: %#v", s, ev.row)
+			}
+			value = int64(lbl.addr)
 		}
-		value = int64(lbl.addr)
 	}
 	return 0xFFFFFF & uint(value)
 }
 
-var SumPattern = regexp.MustCompile(
-	"^[[:space:]]*" + //
-		"([$]?[[:word:]]+|'.)" + // group 1: initial Prim
-		"[[:space:]]*" + //
-		"([-+]?)" + // group 2: Plus or Minus or Empty
-		"[[:space:]]*" + //
-		"([$]?[[:word:]]+)?" + // group 3: next Prim
-		"[[:space:]]*" + //
-		"(.*)" + // group 4: all the rest
-		"$")
+func (ev *Evaluator) Fail() bool {
+	log.Panicf("Evaluator cannot parse %q: unparsed remainder is %q: in row %#v", ev.orig, ev.remain, ev.row)
+	return false
+}
 
-func (mod *Mod) EvalString(row *Row, s string) uint {
-	m := SumPattern.FindStringSubmatch(s)
-	if m == nil {
-		log.Panicf("Eval cannot recognize string %q in row: %#v", s, row)
-	}
-	for len(m) < 5 {
-		m = append(m, "")
-	}
-	left, op, right, rest := m[1], m[2], m[3], m[4]
-	result := mod.EvalPrim(row, left)
+func (ev *Evaluator) EvaluateExpr() uint {
+	var x uint
 
-	switch op {
-	case "":
-		if rest != "" {
-			log.Panic("Syntax error in expression %q in row: %#v", s, row)
+	switch ev.typ {
+	case OPEN:
+		ev.Next()
+		x = ev.EvaluateExpr()
+		if ev.typ != CLOSE {
+			panic(ev.Fail())
 		}
-	case "+":
-		rv := mod.EvalPrim(row, right)
-		t := fmt.Sprintf("$%x %s", result+rv, rest)
-		result = mod.EvalString(row, t)
-	case "-":
-		rv := mod.EvalPrim(row, right)
-		t := fmt.Sprintf("$%x %s", result-rv, rest)
-		result = mod.EvalString(row, t)
+		ev.Next()
+
+	case PRIM:
+		x = ev.EvaluatePrim()
+	default:
+		panic(ev.Fail())
 	}
 
-	return result & 0xFFFFFF
+	if ev.typ == BINOP {
+		binop := ev.tok
+		var y uint
+		ev.Next()
+		switch ev.typ {
+		case OPEN:
+			y = ev.EvaluateExpr()
+			//if ev.typ != CLOSE {
+			//panic(ev.Fail())
+			//}
+			//ev.Next()
+		case PRIM:
+			y = ev.EvaluatePrim()
+		default:
+			panic(ev.Fail())
+		}
+
+		switch binop {
+		case "+":
+			x = x + y
+		case "-":
+			x = x - y
+		case "*":
+			x = x * y
+		case "/":
+			x = x / y
+		case "%":
+			x = x % y
+		case "&":
+			x = x & y
+		case "|":
+			x = x | y
+		case "^":
+			x = x ^ y
+		case "<<":
+			x = x << y
+		case ">>":
+			x = x >> y
+		case "==":
+			x = Truth(x == y)
+		case "!=":
+			x = Truth(x != y)
+		case "<=":
+			x = Truth(x <= y)
+		case ">=":
+			x = Truth(x >= y)
+		case "<":
+			x = Truth(x < y)
+		case ">":
+			x = Truth(x > y)
+		default:
+			log.Panicf("Evaluator cannot parse %q: unknown binary operator %q: in row $#v", ev.orig, binop, ev.row)
+		}
+	}
+
+	return x & 0xFFFFFF
+}
+
+func Truth(b bool) uint {
+	if b {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+func (mod *Mod) Evaluate(row *Row, s string) uint {
+	ev := &Evaluator{
+		mod:    mod,
+		row:    row,
+		orig:   s,
+		remain: s,
+	}
+
+	ev.Next()
+	x := ev.EvaluateExpr()
+	if ev.typ != END {
+		panic(ev.Fail())
+	}
+	return x
 }
 
 func (mod *Mod) EvalArg(row *Row, i int) uint {
@@ -288,7 +461,7 @@ func (mod *Mod) EvalArg(row *Row, i int) uint {
 	if argStr == "" {
 		log.Panicf("empty arg %d: %#v", i, row)
 	}
-	return mod.EvalString(row, argStr)
+	return mod.Evaluate(row, argStr)
 }
 
 var LinePattern = regexp.MustCompile(
@@ -300,12 +473,6 @@ var LinePattern = regexp.MustCompile(
 		"([^;]*)" + // group 3: args
 		"([;].*)?" + // group 4: comment
 		"$")
-
-func LogRows(mod *Mod) {
-	for i, row := range mod.rows {
-		log.Printf("ROW[%4d]: %#v", i, *row)
-	}
-}
 
 // PassThree generates code.
 func PassThree(mod *Mod) {
@@ -336,10 +503,10 @@ func PassTwo(mod *Mod) {
 		if row.length == 0 && row.opcode != "" {
 			// Special Cases: ORG, RMB...
 			if row.opcode == "org" {
-				if len(row.args) < 1 {
-					log.Panicf("Pseudo-opcode ORG needs an argument, in row: %#v", row)
+				if len(row.args) != 1 {
+					log.Panicf("Pseudo-opcode ORG needs one argument, in row: %#v", row)
 				}
-				addr = mod.EvalPrim(row, row.args[0])
+				addr = mod.Evaluate(row, row.args[0])
 				row.addr = addr
 				row.final = true // addr is final
 				if row.label != "" {
@@ -347,10 +514,10 @@ func PassTwo(mod *Mod) {
 					lab.addr = addr
 				}
 			} else if row.opcode == "rmb" {
-				if len(row.args) < 1 {
-					log.Panicf("Pseudo-opcode RMB needs an argument, in row: %#v", row)
+				if len(row.args) != 1 {
+					log.Panicf("Pseudo-opcode RMB needs one argument, in row: %#v", row)
 				}
-				row.length = mod.EvalPrim(row, row.args[0])
+				row.length = mod.Evaluate(row, row.args[0])
 				row.addr = addr
 				row.final = true // addr is final
 				if row.label != "" {
@@ -359,15 +526,21 @@ func PassTwo(mod *Mod) {
 				}
 				addr += row.length
 			} else if row.opcode == "equ" {
-				if len(row.args) < 1 {
-					log.Panicf("Pseudo-opcode EQU needs an argument, in row: %#v", row)
+				if len(row.args) != 1 {
+					log.Panicf("Pseudo-opcode EQU needs one argument, in row: %#v", row)
 				}
-				row.addr = mod.EvalPrim(row, row.args[0])
+				row.addr = mod.Evaluate(row, row.args[0])
 				row.final = true // addr is final
 				if row.label != "" {
 					lab := mod.labels[row.label]
 					lab.addr = row.addr
 				}
+			} else if row.opcode == "assert" {
+				if len(row.args) != 1 {
+					log.Panicf("Pseudo-opcode ASSERT needs one argument, in row: %#v", row)
+				}
+				row.addr = 1
+				row.final = true // addr is final
 			} else {
 				log.Panicf("Uknown pseudo-opcode %q has 0 length, in row: $#v", row.opcode, row)
 			}
@@ -595,24 +768,6 @@ func CreateIPL(mod *Mod) []byte {
 			0x44 /*mv a,m*/, 0)
 		current = pair.addr + 1
 	}
-
-	//if false {
-	//	for i := uint(0); i < RamSize; i++ {
-	//		a := mod.ram[i]
-	//		if a != 0 {
-	//			b, h, l := BhlSplit(i)
-	//			ipl = append(ipl,
-	//				0x04 /*seta*/, a,
-	//				0x05 /*setb*/, b,
-	//				0x06 /*seth*/, h,
-	//				0x07 /*setl*/, l,
-	//				0x44 /*mv a,m*/, 0,
-	//				0x44 /*mv a,m*/, 0, // do it 4 times,
-	//				0x44 /*mv a,m*/, 0, // just so "hd ipl" looks prettier.
-	//				0x44 /*mv a,m*/, 0)
-	//		}
-	//	}
-	//}
 
 	start := uint(0)
 	start_label, ok := mod.labels["start"]
