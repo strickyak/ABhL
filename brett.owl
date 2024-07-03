@@ -113,6 +113,18 @@ LOOP	macro
 	LOOP
 	LOOP
 
+; Numbers are 24-bit unsigned, like the W register.
+	assert ($FFFFFF + 1) == 0
+	assert ($FFFFFF + 2) == 1
+
+; Five built-in functions:
+;   B(num)    -- the most significant byte
+;   H(num)    -- the middle byte
+;   L(num)    -- the least significant byte
+;   HL(num)   -- the lowest 16 bits
+;   W(most:middle:least)  -- compose a number from most, middle, and least bytes.
+; Notice colons are used in the W(::) function, not commas.
+
 X1	equ $456789
 	setb B(X1)    ; should be $45
 	seth H(X1)    ; should be $67
