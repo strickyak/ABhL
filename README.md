@@ -6,11 +6,11 @@ Assembler and Emulator for a proposed TTL CPU: ABhL (pronounced "owl")
 To Assemble:
 
 ```
-echo 'start:  setb 100 ; some comments' | go run owl-asm/owl-asm.go -o a.out /dev/stdin
+go run owl-asm/owl-asm.go  -o a.out  brett.owl
 ```
 
 To Run:
 
 ```
-go run owl-emu/owl-emu.go -ipl a.out
+go run owl-emu/owl-emu.go  -ipl a.out
 ```
