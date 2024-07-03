@@ -134,7 +134,7 @@ X1	equ $456789
 	assert H(X1) == $67
 	assert L(X1) == $89
 
-	// using hex numbers:
+	; using hex numbers:
 W2	equ W($22:$33:$44)   ; use colons, not commas, to separate args to W()
 	setb B(W2)    ; should be $22
 	seth H(W2)    ; should be $33
@@ -145,7 +145,7 @@ W2	equ W($22:$33:$44)   ; use colons, not commas, to separate args to W()
 	assert L(W2) == $44
 	assert HL(W2) == $3344
 	
-	// using decimal numbers:
+	; using decimal numbers:
 D2	equ W(22:33:44)   ; use colons, not commas, to separate args to W()
 	setb B(D2)    ; should be 22
 	seth H(D2)    ; should be 33
@@ -155,6 +155,9 @@ D2	equ W(22:33:44)   ; use colons, not commas, to separate args to W()
 	assert H(D2) == 33
 	assert L(D2) == 44
 	assert HL(D2) == 8492
+
+	; W ignores all but the low byte of its inputs.
+	assert W($44:$55:$66) == W($FFFF44:$EEEE55:$DDDD66)
 	
 ; check math.  Must fully parenthesize -- there is no operator precedence!
 	assert 3 < 9
