@@ -1,0 +1,85 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;;   lib1.owl
+;;;
+;;; First pass at a standard library for ABhL assembly language.
+
+
+; Quick Memory:
+; You may use these Q definitions
+; instead of the raw numbers 0 through 15
+; to make it more readable, that you are
+; doing a LD or ST instruction to quick memory.
+q0  equ 0
+q1  equ 1
+q2  equ 2
+q3  equ 3
+q4  equ 4
+q5  equ 5
+q6  equ 6
+q7  equ 7
+q8  equ 8
+q9  equ 9
+q10 equ 10
+q11 equ 11
+q12 equ 12
+q13 equ 13
+q14 equ 14
+q15 equ 15
+
+; setw(addr)
+;  Sets the W register to the 24-bit value addr.
+setw	Macro	_addr_
+	setb	b(_addr_)
+	seth	h(_addr_)
+	setl	l(_addr_)
+	EndMacro
+
+; fetch1(addr)
+;  Fetches 1 byte from memory address addr and leaves it in the A register.
+;  Clobbers W.
+fetch1	Macro	_addr_
+	setw	_addr_
+	mv	m,a
+	EndMacro
+
+; store1(addr)
+;  Stores 1 byte from the A register at memory address addr.
+store1	Macro	_addr_
+	setw	_addr_
+	mv	a,m
+	EndMacro
+
+; increment1(addr)
+;   Increments 1 byte in memory at the address addr.
+increment1	Macro	_addr_
+	setw	_addr_
+	mv	m,a
+	inca
+	mv	a,m
+	EndMacro
+
+; add1(x,y,z)
+;   Adds 1 byte at memory x to 1 byte at memory y and puts result at memory z.
+add1	Macro	_x_, _y_, _z_
+	fetch1 _x_
+	sta q0
+	fetch1 _y_
+	mv a,l
+	setb AddBank
+	ldh q0
+	mv m,a
+	store1 _z_
+
+; decrement1_bnz(addr, dest)
+;   Decrements 1 byte in memory at addr,
+;   and then if the byte became 0, it branches to dest.
+decrement1_bnz Macro _addr_, _dest_
+	setw	_addr_
+	mv	m,a
+	deca
+	mv	a,m
+	setw	_dest_
+	bnz
+
+

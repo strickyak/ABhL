@@ -1,13 +1,15 @@
-; Brett's start on FORTH in OWL
+; This file started with Brett's start on FORTH in OWL.
+; But it's become a mish-mash of demo and test code.
+; To learn what this assembler can do, and its unique syntax, read this file.
 ;
 ; Arguments may have spaces,
 ; so semicolons are required for comments.
 ;
-; We now have these pesudo-ops: org rmb equ fcw fcb
+; We now have these pesudo-ops: org rmb equ fcw fcb macro endmacro
 ; We have 3 ways of writing numeric args:
-;    decimal, $hex, 'c  (for one character c)
-; The only arithmetic supported is + and -
-; TODO: full arithmetic evaluator.
+;    decimal, $hex, 'c'  (for one character c -- no escapes)
+; Labels starting with @ are scoped to that block or macro expansion.
+; Blocks are separated by completely empty lines.
 
 	org $00
 
@@ -32,7 +34,7 @@ nando	equ $1234
 
 	org $42
 
-start           ; the `start` label is where IPL jumps to.
+old_start           ; the `start` label is where IPL jumps to.
 next:	setb 0
 	ldh PC
 	ldl PC + 1
@@ -124,6 +126,15 @@ LOOP	macro
 ;   HL(num)   -- the lowest 16 bits
 ;   W(most:middle:least)  -- compose a number from most, middle, and least bytes.
 ; Notice colons are used in the W(::) function, not commas.
+
+; Binary operators are like in C, but always use 24-bit unsigned ints:
+;    + - * / %   << >>   & | ^ << >>    == != <= >= < >
+; There is no priority of operators, so you must FULLY parenthesize any non-trivial expression.
+
+; There are no unary operators and no negative numbers.
+;    To simulate "-x" use "0-x".
+;    To simulate "~x" use "$ffffff^x".
+;    To simulate "!x" use "x == 0".
 
 X1	equ $456789
 	setb B(X1)    ; should be $45
@@ -222,5 +233,56 @@ _label_ equ _num_ * _num_
 
 	Square 12, Gross
 	assert Gross == 144
+
+;;;; macros containing macros
+
+; SayHi writes "Hi!\n" to port F,
+; which the emulator currently connects
+; to stdin and stdout.
+SayHi:	Macro
+@debugBegin
+		setb 'H'
+		mv b,f
+		setb 'i'
+		mv b,f
+		setb '!'
+		mv b,f
+		setb 10
+		mv b,f
+@debugEnd
+	EndMacro
+
+; Welcome uses SayHi, looping it _n_ times. 
+Welcome: Macro _n_
+		seta _n_
+@loop:
+		SayHi
+		deca
+		setb B(@loop)
+		seth H(@loop)
+		setl L(@loop)
+		bnz 
+	EndMacro
+
+start:
+N: equ 5
+	Welcome N   ; say Hi N times
+M: equ 3
+	Welcome M   ; say Hi M more times
+
+
+;disable ; Recursive MACROs should cause an error.
+;disable ; We have to forbid them, because we have no conditionals to stop the recursion.
+;disable
+;disable aaa	Macro
+;disable 	bbb
+;disable 	EndMacro
+;disable 
+;disable bbb	Macro
+;disable 	aaa
+;disable 	EndMacro
+;disable 
+;disable 	aaa
+;disable -> panic: Infinite recursion detected: MACRO "aaa" is already active: map[string]bool{"aaa":true, "bbb":true}
 
 ; END

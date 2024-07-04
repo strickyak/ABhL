@@ -589,53 +589,70 @@ func MacroPassTwo(mod *Mod) {
 			unique = fmt.Sprintf("B%d__", serial)
 		}
 
-		macro, ok := mod.macros[row.opcode]
-		if ok {
-			saved := unique
-			serial++
-			unique = fmt.Sprintf("M%d__", serial)
+		activeMacros := make(map[string]bool)
 
-			newRows = append(newRows, &Row{
-				comment: fmt.Sprintf("; Expanded macro %s ( %s )",
-					row.opcode,
-					strings.Join(row.args, ", ")),
-			})
-			for _, innerRow := range macro.rows {
-				// Append normal non-macro rows to newRows.
-				var innerCopy Row = *innerRow // struct assignment makes a copy
+		var recursiveAppendSimpleOpcodeOrMacroExpansion func(row_ *Row)
+		recursiveAppendSimpleOpcodeOrMacroExpansion = func(row_ *Row) {
 
-				for i, formal := range macro.formals {
-					param := row.args[i]
-					innerCopy.label = strings.Replace(innerCopy.label, formal, param, -1)
-					innerCopy.label = strings.Replace(innerCopy.label, "@", unique, -1)
-					innerCopy.opcode = strings.Replace(innerCopy.opcode, formal, param, -1)
-					var newArgs []string
-					for _, arg := range innerCopy.args {
-						arg = strings.Replace(arg, formal, param, -1)
-						arg = strings.Replace(arg, "@", unique, -1)
-						newArgs = append(newArgs, arg)
+			macro, ok := mod.macros[row_.opcode]
+			if ok {
+				// Enter the macro.  Check it is not active, and mark it active.
+				if active, _ := activeMacros[row_.opcode]; active {
+					log.Panicf("Infinite recursion detected: MACRO %q is already active: %#v", row_.opcode, activeMacros)
+				}
+				activeMacros[row_.opcode] = true
+
+				saved := unique
+				serial++
+				unique = fmt.Sprintf("M%d__", serial)
+
+				newRows = append(newRows, &Row{
+					comment: fmt.Sprintf("; Expanded macro %s ( %s )",
+						row_.opcode,
+						strings.Join(row_.args, ", ")),
+				})
+				for _, innerRow := range macro.rows {
+					// Append normal non-macro rows to newRows.
+					var innerCopy Row = *innerRow // struct assignment makes a copy
+
+					for i, formal := range macro.formals {
+						param := row_.args[i]
+						innerCopy.label = strings.Replace(innerCopy.label, formal, param, -1)
+						innerCopy.label = strings.Replace(innerCopy.label, "@", unique, -1)
+						innerCopy.opcode = strings.Replace(innerCopy.opcode, formal, param, -1)
+						var newArgs []string
+						for _, arg := range innerCopy.args {
+							arg = strings.Replace(arg, formal, param, -1)
+							arg = strings.Replace(arg, "@", unique, -1)
+							newArgs = append(newArgs, arg)
+						}
+						innerCopy.args = newArgs
 					}
-					innerCopy.args = newArgs
+
+					// newRows = append(newRows, &innerCopy)
+					recursiveAppendSimpleOpcodeOrMacroExpansion(&innerCopy)
 				}
 
-				newRows = append(newRows, &innerCopy)
+				newRows = append(newRows, &Row{
+					comment: "; End Expansion",
+				})
+
+				// Exit the MACRO.
+				unique = saved
+				activeMacros[row_.opcode] = false
+			} else {
+				// Append normal non-macro rows to newRows.
+				row_.label = strings.Replace(row_.label, "@", unique, -1)
+				var newArgs []string
+				for _, arg := range row_.args {
+					newArgs = append(newArgs, strings.Replace(arg, "@", unique, -1))
+				}
+				row_.args = newArgs
+				newRows = append(newRows, row_)
 			}
 
-			newRows = append(newRows, &Row{
-				comment: "; End Expansion",
-			})
-
-			unique = saved
-		} else {
-			// Append normal non-macro rows to newRows.
-			row.label = strings.Replace(row.label, "@", unique, -1)
-			var newArgs []string
-			for _, arg := range row.args {
-				newArgs = append(newArgs, strings.Replace(arg, "@", unique, -1))
-			}
-			row.args = newArgs
-			newRows = append(newRows, row)
 		}
+		recursiveAppendSimpleOpcodeOrMacroExpansion(row)
 	}
 	mod.rows = newRows // with the macros expanded
 }
