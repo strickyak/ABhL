@@ -35,33 +35,166 @@ setw	Macro	_addr_
 	setl	l(_addr_)
 	EndMacro
 
-; fetch1(addr)
+; sthl(q)
+;  Stores 2-byte H:L in quick registers q and q+1
+sthl	Macro _q_
+	sth _q_+0
+	stl _q_+1
+	EndMacro
+
+; ldhl(q)
+;  Loads 2-byte H:L from quick registers q and q+1
+ldhl	Macro _q_
+	ldh _q_+0
+	ldl _q_+1
+	EndMacro
+
+; stw(q)
+;  Stores 3-byte W in quick registers q, q+1, and q+2
+stw	Macro _q_
+	stb _q_
+	sth _q_+1
+	stl _q_+2
+	EndMacro
+
+; ldw(q)
+;  Loads 3-byte W from quick registers q, q+1, and q+2
+ldw	Macro _q_
+	ldb _q_
+	ldh _q_+1
+	ldl _q_+2
+	EndMacro
+
+; jump(dest)
+jump	Macro	_dest_
+	setw	_dest_
+	seta	1
+	bnz
+	EndMacro
+
+; decrement1q_bnz(q, dest)
+;   Decrements 1 byte in quick at q,
+;   and then if the byte became 0, it branches to dest.
+decrement1q_bnz Macro _q_, _dest_
+	lda	_q_
+	deca
+	sta	_q_
+	setw	_dest_
+	bnz
+	EndMacro
+
+; decrement1m_bnz(addr, dest)
+;   Decrements 1 byte in memory at addr,
+;   and then if the byte became 0, it branches to dest.
+decrement1m_bnz Macro _addr_, _dest_
+	setw	_addr_
+	mv	m,a
+	deca
+	mv	a,m
+	setw	_dest_
+	bnz
+	EndMacro
+
+; fetch1a(addr)
 ;  Fetches 1 byte from memory address addr and leaves it in the A register.
 ;  Clobbers W.
-fetch1	Macro	_addr_
+fetch1a	Macro	_addr_
 	setw	_addr_
 	mv	m,a
 	EndMacro
 
-; store1(addr)
+; store1a(addr)
 ;  Stores 1 byte from the A register at memory address addr.
-store1	Macro	_addr_
+;  Clobbers W.
+store1a	Macro	_addr_
 	setw	_addr_
 	mv	a,m
 	EndMacro
 
-; increment1(addr)
+; fetch1q(q, addr)
+;  Fetches 1 byte from memory address addr and leaves it in quick q
+;  Clobbers W.
+fetch1q	Macro	_q_, _addr_
+	setw	_addr_
+	mv	m,a
+	sta	_q_
+	EndMacro
+
+; store1q(q, addr)
+;  Stores 1 byte from quick q at memory address addr.
+;  Clobbers W.
+store1q	Macro	_q_, _addr_
+	setw	_addr_
+	lda	_q_
+	mv	a,m
+	EndMacro
+
+; fetch2q(q, addr,q)
+;  Fetches 2 byte from memory address addr and leaves it in quick q & q+1
+;  Clobbers W.
+fetch2q	Macro	_q_, _addr_
+	setw	_addr_
+	mv	m,a
+	sta	_q_
+	incw
+	mv	m,a
+	sta	_q_+1
+	EndMacro
+
+; store2q(q, addr,q)
+;  Stores 2 byte from quick q & q+1 at memory address addr.
+;  Clobbers W.
+store2q	Macro	_q_, _addr_
+	setw	_addr_
+	lda	_q_
+	mv	a,m
+	incw
+	lda	_q_+1
+	mv	a,m
+	EndMacro
+
+; fetch3q(q, addr,q)
+;  Fetches 3 byte from memory address addr and leaves it in quick q & q+1 & q+2
+;  Clobbers W.
+fetch3q	Macro	_q_, _addr_
+	setw	_addr_
+	mv	m,a
+	sta	_q_
+	incw
+	mv	m,a
+	sta	_q_+1
+	incw
+	mv	m,a
+	sta	_q_+2
+	EndMacro
+
+; store3q(q, addr,q)
+;  Stores 3 byte from quick q & q+1 & q+2 at memory address addr.
+;  Clobbers W.
+store3q	Macro	_q_, _addr_
+	setw	_addr_
+	lda	_q_
+	mv	a,m
+	incw
+	lda	_q_+1
+	mv	a,m
+	incw
+	lda	_q_+2
+	mv	a,m
+	EndMacro
+
+; increment1m(addr)
 ;   Increments 1 byte in memory at the address addr.
-increment1	Macro	_addr_
+increment1m	Macro	_addr_
 	setw	_addr_
 	mv	m,a
 	inca
 	mv	a,m
 	EndMacro
 
-; add1(x,y,z)
+; add1m(x,y,z)
 ;   Adds 1 byte at memory x to 1 byte at memory y and puts result at memory z.
-add1	Macro	_x_, _y_, _z_
+add1m	Macro	_x_, _y_, _z_
 	fetch1 _x_
 	sta q0
 	fetch1 _y_
@@ -70,16 +203,65 @@ add1	Macro	_x_, _y_, _z_
 	ldh q0
 	mv m,a
 	store1 _z_
+	EndMacro
 
-; decrement1_bnz(addr, dest)
-;   Decrements 1 byte in memory at addr,
-;   and then if the byte became 0, it branches to dest.
-decrement1_bnz Macro _addr_, _dest_
-	setw	_addr_
-	mv	m,a
-	deca
-	mv	a,m
-	setw	_dest_
+; add3qqq qx, qy, qz
+; Add two 3 bytes numbers using quick registers
+;   qx:qx+1:qx+2
+;     plus
+;   qy:qy+1:qy+2
+;     yields
+;   qz:qz+1:qz+2
+; 
+; Clobbers Q15.
+add3qqq Macro _x_,_y_,_z_
+	setb AddBank
+	ldh _x_+2
+	ldl _y_+2
+	mv m, a     ; add least sig bytes
+	sta _z_+2
+;
+	setb CarrySub1Bank
+	mv m, a     ; carry of least sig bytes
+	sta _z_      ; Save carry in temp _z_
+;
+	setb AddBank
+	ldh _x_+1
+	ldl _y_+1
+	mv m, a     ; add least sig bytes
+	sta _z_+1
+;
+	setb CarrySub1Bank
+	mv m, a     ; carry of least sig bytes
+	sta Q15     ; Save Middle carry in temp Q15
+;	
+	lda _z_	    ; recover Lower carry
+	setw @NoLowerCarry
+	bnz         ; if carry was not 1
+;
+	; There was a lower carry.
+	: So increment the pair q15:qz+1.
+	ldh q15
+	ldl _z_+1
+	incw
+	sth q15
+	stl _z_+1
+;
+@NoLowerCarry:
+	; with middle carry in q15, add most sig bytes.
+	ldh _x_
+	ldl _y_
+	mv m,a
+	sta _z_
+;
+	; check the middle carry
+	lda q15
+	ldw @NoMidCarry
 	bnz
-
-
+;
+	; There was a middle carry.
+	lda _z_
+	inca
+	sta _z_
+@NoMidCarry:
+	EndMacro

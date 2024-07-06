@@ -270,6 +270,12 @@ N: equ 5
 M: equ 3
 	Welcome M   ; say Hi M more times
 
+dotted.label: equ 42
+dotted.macro Macro dotted.arg
+	seth dotted.label
+	setl dotted.arg
+	EndMacro
+	dotted.macro 86
 
 ;disable ; Recursive MACROs should cause an error.
 ;disable ; We have to forbid them, because we have no conditionals to stop the recursion.

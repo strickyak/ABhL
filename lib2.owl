@@ -1,0 +1,77 @@
+; lib2.owl -- Standard Banks and Rows for Lookup Tables
+;
+; Currently this allocates 9 banks.
+; Currently not allocated:
+;    DivBank
+;    ModBank
+;    XorBank
+;    SignedLessThanBank
+;
+; Subtraction is done by negation and addition.
+; (Negation of a multibyte integer: Invert bytewise, then increment as a whole.)
+;
+; strick -- July 5, 2024
+
+; Allocate one bank for small lookup tables on rows of 256 bytes.
+; The bank for all these rows will be RowsBank.
+; (The first time you call BANK with no arguments,
+;  the assembler allocates the bank that the ROW pseudo-op will use.)
+RowsBank        BANK
+
+; Define some small row-based lookup tables.
+; The first argument to ROW is the prototype expression
+; to use for initializing each byte in the row,
+; using the offset in temporary index variable _L_.
+; The second argument is how many rows to create,
+; with the row index in temporary index variable H.
+; The number of rows defaults to 1.
+
+NegRow                ROW   (0-_L_)     ; Negate a byte.
+
+InvRow                ROW   (255^_L_)   ; Invert a byte.
+
+ShiftLeftRows         ROW   (_L_<<_H_), 9  ; Eight rows for shift left by 0..8 bits
+ShiftRightRows        ROW   (_L_>>>_H_), 9  ; Eight rows for unsigned shift right by 0..8 bits
+
+; NOTA BENE: 24 bit arithmetic.  So shift a byte 16 left, to affect the sign bit.
+SignedShiftRightRows  ROW   ((_L_<<16)>>(_H_+16)), 9  ; Eight rows for signed shift right by 0..8 bits
+
+; These test, set, or clear the _H_'th bit in the byte _L_.
+TestBitRows           ROW   _L_&(1<<_H_), 9
+SetBitRows            ROW   _L_|(1<<_H_), 9
+ClearBitRows          ROW   _L_&(255^(1<<_H_)), 9
+
+; Now define large lookup tables that consume an
+; entire Bank of memory.  _H_ and _L_ are temporary
+; index variables to specify the H and L values
+; in the prototype expression.
+
+; AddBank is the 8-bit sum of _H_ and _L_
+AddBank               BANK   (_H_+_L_)
+
+; CarrySub1Bank is the Carry from the 8-bit sum of _H_ and _L_
+; with 1 subtracted from it.   So this will be 0 if there is a carry,
+; or it will be 255 if there is not.  This is designed so that
+; if you put it in the A register, BNZ will branch if no carry,
+; to let you skip over the carry increment code.
+CarrySub1Bank        BANK   ((_H_+_L_)>>8)-1
+
+; MulLoBank is the Low 8 bits of the 16-bit product of multiplying two 8-bit numbers.
+MulLoBank            BANK   (_H_*_L_)
+
+; MulHiBank is the High 8 bits of the 16-bit product of multiplying two 8-bit numbers.
+MulHiBank            BANK   (_H_*_L_)>>8
+
+; LessThanBank tells if _H_ is less than _L_, with 1 for true and 0 for false.
+LessThanBank         BANK   _H_ < _L_
+
+; EqualBank tells if _H_ is equal to _L_, with 1 for true and 0 for false.
+EqualBank            BANK   _H_ == _L_
+
+; AndBank is the bitwise AND of _H_ and _L_.
+AndBank              BANK   (_H_ & _L_)
+
+; OrBank is the bitwise OR of _H_ and _L_.
+OrBank               BANK   (_H_ | _L_)
+
+; END

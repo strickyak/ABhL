@@ -26,6 +26,11 @@ type Mod struct {
 	listing io.Writer
 
 	generated []AddrData
+
+	// for the ROW and BANK pseudo-ops to allocate rows and banks
+	currentRow  uint
+	currentBank uint
+	rowsBank    uint
 }
 
 type Macro struct {
@@ -45,8 +50,7 @@ type Row struct {
 	length uint
 	addr   uint
 	final  bool // is addr final?
-	// addrX  *Expr  // is addr computed?
-	where string
+	where  string
 }
 
 type Instr struct {
@@ -59,7 +63,6 @@ type Expr struct { // TODO
 
 type Label struct {
 	addr uint
-	// addrX  *Expr  // is addr computed?
 }
 
 func (mod *Mod) Gen(row *Row, addr uint, value byte) {
@@ -90,6 +93,41 @@ var Instructions = map[string]*Instr{
 			log.Panicf("Assert fails in row %#v", row)
 		}
 		// nothing generated
+		mod.ShowGenPseudo(row, row.addr)
+	}},
+	"row": {0, func(mod *Mod, row *Row) {
+		numRows := uint(1)
+		if len(row.args) >= 2 {
+			numRows = mod.EvalArg(row, 1)
+		}
+		for h := uint(0); h < numRows; h++ {
+			mod.labels["_H_"] = &Label{addr: h}
+			for l := uint(0); l < 256; l++ {
+				mod.labels["_L_"] = &Label{addr: l}
+				value := mod.EvalArg(row, 0)
+				mod.Gen(row, (mod.rowsBank<<16)+(row.addr<<8)+(h<<8)+l, byte(value))
+			}
+		}
+		delete(mod.labels, "_H_")
+		delete(mod.labels, "_L_")
+
+		mod.ShowGenPseudo(row, row.addr)
+	}},
+	"bank": {0, func(mod *Mod, row *Row) {
+
+		if len(row.args) >= 1 && row.args[0] != "" {
+			for h := uint(0); h < 256; h++ {
+				mod.labels["_H_"] = &Label{addr: h}
+				for l := uint(0); l < 256; l++ {
+					mod.labels["_L_"] = &Label{addr: l}
+					value := mod.EvalArg(row, 0)
+					mod.Gen(row, (row.addr<<16)+(h<<8)+l, byte(value))
+				}
+			}
+			delete(mod.labels, "_H_")
+			delete(mod.labels, "_L_")
+		}
+
 		mod.ShowGenPseudo(row, row.addr)
 	}},
 	"rmb": {0, func(mod *Mod, row *Row) {
@@ -219,8 +257,8 @@ func (mod *Mod) GetArgReg(row *Row, i int) uint {
 }
 
 var Lexers = map[int]*regexp.Regexp{
-	PRIM:  regexp.MustCompile(`^[[:space:]]*([$]?[[:word:]]+|'.')(.*)$`),
-	BINOP: regexp.MustCompile(`^[[:space:]]*([-+*/%^|&]|<<|>>|==|!=|<=|>=|<|>)(.*)$`),
+	PRIM:  regexp.MustCompile(`^[[:space:]]*([$]?[[:word:].]+|'.')(.*)$`),
+	BINOP: regexp.MustCompile(`^[[:space:]]*([-+*/%^|&]|<<|>>>|>>|==|!=|<=|>=|<|>)(.*)$`),
 	OPEN:  regexp.MustCompile(`^[[:space:]]*([(])(.*)$`),
 	CLOSE: regexp.MustCompile(`^[[:space:]]*([)])(.*)$`),
 	COLON: regexp.MustCompile(`^[[:space:]]*([:])(.*)$`),
@@ -407,8 +445,15 @@ func (ev *Evaluator) EvaluateExpr() uint {
 			x = x ^ y
 		case "<<":
 			x = x << y
-		case ">>":
+		case ">>>": // unsigned: shifts zeros in
 			x = x >> y
+		case ">>": // signed: sign bit replicates
+			// NOTA BENE: 24-bit arithmetic.
+			if (x & 0x800000) == 0 {
+				x = x >> y
+			} else {
+				x = (x | ^uint(0x7FFFFF)) >> y
+			}
 		case "==":
 			x = Truth(x == y)
 		case "!=":
@@ -466,9 +511,9 @@ func (mod *Mod) EvalArg(row *Row, i int) uint {
 
 var LinePattern = regexp.MustCompile(
 	"^" +
-		"([A-Za-z0-9_@]*)[:]?" + // group 1: label
+		"([A-Za-z0-9_.@]*)[:]?" + // group 1: label
 		"[\t ]*" +
-		"([A-Za-z0-9_]*)" + // group 2: opcode
+		"([A-Za-z0-9_.]*)" + // group 2: opcode
 		"[\t ]*" +
 		"([^;]*)" + // group 3: args
 		"([;].*)?" + // group 4: comment
@@ -525,6 +570,38 @@ func PassTwo(mod *Mod) {
 					lab.addr = addr
 				}
 				addr += row.length
+			} else if row.opcode == "row" {
+				row.length = 0
+				numRows := uint(1) // default
+				if len(row.args) == 2 {
+					numRows = mod.Evaluate(row, row.args[1])
+				}
+				mod.currentRow += numRows
+				if mod.currentRow > 255 {
+					log.Panicf("Too many ROW TABLES allocated, in row: %#v", row)
+				}
+				row.addr = mod.currentRow - numRows
+				row.final = true // addr is final
+				if row.label != "" {
+					lab := mod.labels[row.label]
+					lab.addr = addr
+				}
+			} else if row.opcode == "bank" {
+				row.length = 0
+				mod.currentBank++
+				if mod.currentBank > 15 { // assuming 1MB RAM
+					log.Panicf("Too many BANK TABLES allocated, in row: %#v", row)
+				}
+				row.addr = mod.currentBank
+				if row.args[0] == "" && mod.rowsBank == 0 {
+					// Special BANK allocation with no arguments is the Rows Bank.
+					mod.rowsBank = mod.currentBank
+				}
+				row.final = true // addr is final
+				if row.label != "" {
+					lab := mod.labels[row.label]
+					lab.addr = addr
+				}
 			} else if row.opcode == "equ" {
 				if len(row.args) != 1 {
 					log.Panicf("Pseudo-opcode EQU needs one argument, in row: %#v", row)
