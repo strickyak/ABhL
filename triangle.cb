@@ -1,0 +1,18 @@
+func triangle (n) s, i {
+	while (i < n) {
+		s = s + i
+		++i
+	}
+}
+
+func putchar ( ch ) {
+  PortF = ch
+}
+
+func putdigit ( x ) {
+  putchar ( x + 48 )
+}
+
+
+var count
+
