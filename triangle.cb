@@ -13,6 +13,27 @@ func putdigit ( x ) {
   putchar ( x + 48 )
 }
 
+func putnum ( x ) h t {
+  while ( x >= 100 ) {
+  	h ++
+	x = x - 100
+  }
+  if ( h > 0 ) { putdigit ( h ) }
+  while ( x >= 10 ) {
+  	t ++
+	x = x - 10
+  }
+  if ( t > 0 ) { putdigit ( t ) }
+  putdigit ( x )
+}
 
 var count
 
+func main ( ) {
+  while ( count < 10 ) {
+    putnum ( tri ( count ) )
+    putchar ( 32 )
+    count ++
+  }
+  putchar ( 10 )
+}

@@ -74,17 +74,6 @@ type Parser struct {
 	qsp int // Quick Stack Pointer
 }
 
-/*
-var Lexers = map[int]*regexp.Regexp{
-	KEYWORD: regexp.MustCompile(`^[[:space:]]*(func|var|bank|row|while|return)\b(.*)$`),
-	NUMBER:  regexp.MustCompile(`^[[:space:]]*((0x)?[0-9]+|'.')(.*)$`),
-	IDENT:   regexp.MustCompile(`^[[:space:]]*([[:word:]]+)(.*)$`),
-	BINOP:   regexp.MustCompile(`^[[:space:]]*([+][+]|[-][-]|[-+*%/^|&]|<<|>>|==|!=|<=|>=|<|>)(.*)$`),
-	PUNC:    regexp.MustCompile(`^[[:space:]]*([(){}=,;])(.*)$`),
-	EOF:     regexp.MustCompile(`^[[:space:]]*()()$`),
-}
-*/
-
 var Lexers = []struct {
 	typ     int
 	pattern *regexp.Regexp
@@ -98,7 +87,6 @@ var Lexers = []struct {
 }
 
 func (par *Parser) Next() {
-	// for typ, pattern := range Lexers {
 	for _, pair := range Lexers {
 		Log("Try pattern %d : %q ======= %q", pair.typ, pair.pattern, par.remain)
 		m := pair.pattern.FindStringSubmatch(par.remain)
@@ -125,12 +113,9 @@ func (par *Parser) LineNo() int {
 }
 
 type Expr struct {
-	// One of these may be set
-	/////// addr  string
 	konst *uint
 	vari  string
 
-	// Or this group is used
 	subj *Expr
 	args []*Expr
 	op   string
