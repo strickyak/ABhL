@@ -1,0 +1,19 @@
+func main () newline {
+	newline = 10
+
+	WritePortF('H')
+	WritePortF('e')
+	WritePortF('l')
+	WritePortF('l')
+	WritePortF('o')
+	WritePortF(' ')
+	WritePortF('W')
+	WritePortF('o')
+	WritePortF('r')
+	WritePortF('l')
+	WritePortF('d')
+	WritePortF('!')
+	WritePortF(newline)
+
+	WritePortG(0)
+}

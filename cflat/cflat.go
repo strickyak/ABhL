@@ -18,12 +18,12 @@ import (
 func main() {
 	flag.Parse()
 
-	for _, arg := range flag.Args() {
-		Compile(arg)
+	for i, arg := range flag.Args() {
+		Compile(arg, i)
 	}
 }
 
-func Compile(filename string) {
+func Compile(filename string, modnum int) {
 	bb := Value(ioutil.ReadFile(filename))
 	w := Value(os.Create(filename + ".genowl"))
 	src := string(bb)
@@ -42,8 +42,7 @@ func Compile(filename string) {
 	}
 	par.Next() // move to initial token
 	par.Parse()
-	par.Header()
-	par.Generate()
+	par.GenerateModule(modnum)
 }
 
 const (
@@ -70,9 +69,12 @@ type Parser struct {
 	funcs map[string]*Func
 
 	// Code Generation
-	w   io.Writer
-	qsp int // Quick Stack Pointer
+	w      io.Writer
+	qsp    quick // Quick Stack Pointer
+	serial uint
 }
+
+type quick int // An index into pairs of H,L quick registers, or a stack level.
 
 var Lexers = []struct {
 	typ     int
@@ -121,102 +123,189 @@ type Expr struct {
 	op   string
 }
 
-// QStack gives the Q pair for the corresponding Quick Stack position,
-// where 1=top, 2=nextToTop, 3=...
-func (par *Parser) QStack(i int) int {
-	return 2*par.qsp - i
-}
-func (par *Parser) QPop() int {
-	par.qsp--
+func (par *Parser) QPop() {
+	par.qsp -= 2
 	if par.qsp < 0 {
 		par.Fail("Quick Stack Underflow")
 	}
-	return par.QStack(1)
 }
-func (par *Parser) QPush() int {
-	par.qsp++
-	if par.qsp > 8 {
+func (par *Parser) QPush() quick {
+	par.qsp += 2
+	if par.qsp > 16 {
 		par.Fail("Quick Stack Overflow")
 	}
-	return par.QStack(1)
+	return par.qsp - 2
 }
 
-func (par *Parser) EvaluateVar(fn *Func, ex *Expr) string {
+func (par *Parser) VarNameOfExpr(fn *Func, ex *Expr) string {
 	if ex.vari != "" {
-		name := ex.vari
-		if Contains(fn.args, name) || Contains(fn.locals, name) {
-			name = Fmt("%s.var.%s", fn.id, name)
-		}
-		return name
+		return par.VarName(fn, ex.vari)
 	}
 	panic(par.Fail("Should be a variable name: %#v", ex))
 }
+func (par *Parser) VarName(fn *Func, name string) string {
+	if Contains(fn.args, name) || Contains(fn.locals, name) {
+		name = Fmt("%s.var.%s", fn.id, name)
+	}
+	return name
+}
 
-/*********************
-func (par *Parser) GenerateExpr(fn *Func, ex *Expr) (z []string) {
+func (par *Parser) EvaluateExpr(fn *Func, ex *Expr) quick {
+	pf := func(f string, args ...any) {
+		fmt.Fprintf(par.w, f+"\n", args...)
+	}
+
 	// Create a new stack slot for the result.
 	q := par.QPush()
 
-	z = append(z, Fmt("; q=%d EvaluateExpr(%#v)", q, *ex))
+	pf("; q=%d EvaluateExpr(%#v)", q, *ex)
+
 	if ex.konst != nil {
-		z = append(z,
-			Fmt("  setw $%x", *ex.konst),
-			Fmt("  sthl q%d", q),
-		)
+		pf("; place konst to q%d", q)
+		pf("  setw $%x", *ex.konst)
+		pf("  sthl q%d", q)
+		pf("")
 	} else if ex.vari != "" {
 		name := ex.vari
 		if Contains(fn.args, name) || Contains(fn.locals, name) {
 			name = Fmt("%s.var.%s", fn.id, name)
 		}
-		z = append(z,
-			Fmt("  setw %s", name),
-			"  mv m,a",
-			Fmt("  sta q%d", q),
-			"  incw",
-			"  mv m,a",
-			Fmt("  sta q%d", q+1),
-			";",
-		)
+
+		pf("; fetch variable %q to q%d", name, q)
+		pf("  setw %s ; point to variable", name)
+		pf("  mv m,a  ; fetch HI part")
+		pf("  sta q%d", q)
+		pf("  incw")
+		pf("  mv m,a  ; fetch LO part")
+		pf("  sta q%d", q+1)
+		pf("")
 	} else {
 		switch ex.op {
 		case "":
 			par.EvaluateExpr(fn, ex.subj)
 		case "++":
-			varName := par.EvaluateVar(fn, ex.subj)
-			z = append(z,
-				Fmt("  setw %s", varName),
-				"  mv m,a",
-				"  incw",
-				"  mv m,l",
-				"  mv a,h",
-				"  incw",
-				Fmt("  sthl q%d", q),
-				Fmt("  setw %s", varName),
-				Fmt("  lda q%d", q),
-				"mv a,m",
-				"  incw",
-				Fmt("  lda q%d", q+1),
-				"mv a,m",
-				";",
-			)
+			varName := par.VarNameOfExpr(fn, ex.subj)
+
+			pf("  setw %s", varName)
+			pf("  mv m,a")
+			pf("  incw")
+			pf("  mv m,l")
+			pf("  mv a,h")
+			pf("  incw")
+			pf("  sthl q%d", q)
+			pf("  setw %s", varName)
+			pf("  lda q%d", q)
+			pf("mv a,m")
+			pf("  incw")
+			pf("  lda q%d", q+1)
+			pf("mv a,m")
+			pf(";")
+
+		case "--":
+			varName := par.VarNameOfExpr(fn, ex.subj)
+
+			pf("  setw %s", varName)
+			pf("  mv m,a")
+			pf("  incw")
+			pf("  mv m,l")
+			pf("  mv a,h")
+			pf("  decw")
+			pf("  sthl q%d", q)
+			pf("  setw %s", varName)
+			pf("  lda q%d", q)
+			pf("mv a,m")
+			pf("  incw")
+			pf("  lda q%d", q+1)
+			pf("mv a,m")
+			pf(";")
+
 		case "+":
-			par.EvaluateExpr(fn, ex.subj)
-			q1 := par.QStack(1)
-			par.EvaluateExpr(fn, ex.args[0])
-			q2 := par.QStack(1)
-			z = append(z,
-				Fmt("  add2qqq q%d,q%d,q%d", q1, q2, q),
-			)
+			q1 := par.EvaluateExpr(fn, ex.subj)
+			q2 := par.EvaluateExpr(fn, ex.args[0])
+
+			pf("  add2qqq q%d,q%d,q%d", q1, q2, q)
+
 			par.QPop()
 			par.QPop()
+		case "call":
+			subj := ex.subj
+			callname := subj.vari // called function name
+			pf("; Going to call function %q", callname)
+			switch callname {
+			// Special predefined "functions"
+			case "WritePortF":
+				qa := par.EvaluateExpr(fn, ex.args[0])
+				pf("  lda q%d ; get LOW part only", qa+1)
+				pf("  mv a,f  ; WritePortF")
+				par.QPop()
+			case "WritePortG":
+				qa := par.EvaluateExpr(fn, ex.args[0])
+				pf("  lda q%d ; get LOW part only", qa+1)
+				pf("  mv a,g  ; WritePortG")
+				par.QPop()
+			case "":
+				par.Fail("Function call needs function name: %#v", ex)
+			default:
+				called, ok := par.funcs[callname]
+				if !ok {
+					par.Fail("Function call to unknown function %q: %#v", callname, ex)
+				}
+				if len(called.args) != len(ex.args) {
+					par.Fail("Function %q takes %d args, but calling with %d args",
+						callname, len(called.args), len(ex.args))
+				}
+				for i, arg := range ex.args {
+					formal := called.args[i]
+					varName := Fmt("%s.var.%s", callname, formal)
+					qi := par.EvaluateExpr(fn, arg)
+					pf("; setting formal param of called %q arg #%d %q from expr %#v",
+						callname, i, formal, arg)
+					pf("  setw %s", varName)
+					pf("  lda q%d ; Hi part", qi)
+					pf("  mv a,m")
+					pf("  incw")
+					pf("  lda q%d ; LO part", qi+1)
+					pf("  mv a,m")
+					pf("")
+					par.QPop()
+				}
+				par.serial++
+				serial := par.serial
+
+				pf("  setw %s.retsetb+1 ; set return location by modifying code", callname)
+				pf("  lda B(return.%d)", serial)
+				pf("  mv a,m")
+
+				pf("  setw %s.retseth+1 ; set return location by modifying code", callname)
+				pf("  lda H(return.%d)", serial)
+				pf("  mv a,m")
+
+				pf("  setw %s.retsetl+1 ; set return location by modifying code", callname)
+				pf("  lda L(return.%d)", serial)
+				pf("  mv a,m")
+
+				pf("  setw %s.entry ; call the function", callname)
+				pf("  seta 1")
+				pf("  bnz")
+				pf("return.%d:", serial)
+
+				pf("  setw %s.retval ; copy return value to quick %d", callname, q)
+				pf("  mv m,a")
+				pf("  sta q%d ; HI part of retval", q)
+				pf("  incw")
+				pf("  mv m,a")
+				pf("  sta q%d ; LO part of retval", q+1)
+				pf("")
+				pf("")
+			}
+
 		default:
 			panic(ex.op)
 		}
 
 	}
-	return
+	return q
 }
-************/
 
 type Stmt struct {
 	kind  string
@@ -522,6 +611,14 @@ LOOP:
 				kind:   "++",
 				assign: id,
 			})
+		case "--":
+			par.Take("--")
+			id := par.TakeIdent()
+			par.TakeEnder()
+			body = append(body, &Stmt{
+				kind:   "--",
+				assign: id,
+			})
 		case ";":
 			par.Take(";")
 			// pass
@@ -546,10 +643,20 @@ LOOP:
 				par.Take("++")
 				assigned := x.vari
 				if assigned == "" {
-					par.Fail("Bad LHS of ++: %#v", x)
+					par.Fail("Bad LHS of increment: %#v", x)
 				}
 				body = append(body, &Stmt{
 					kind:   "++",
+					assign: assigned,
+				})
+			case "--":
+				par.Take("--")
+				assigned := x.vari
+				if assigned == "" {
+					par.Fail("Bad LHS of decrement: %#v", x)
+				}
+				body = append(body, &Stmt{
+					kind:   "--",
 					assign: assigned,
 				})
 			default:
@@ -611,17 +718,57 @@ func (par *Parser) DefineRow(id string) {
 func (par *Parser) DefineVar(id string) {
 	par.vars[id] = true
 }
-func (par *Parser) Header() {
+func (par *Parser) GenerateHeader() {
 	pf := func(f string, args ...any) {
 		fmt.Fprintf(par.w, f+"\n", args...)
 	}
 
+	pf(";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;")
+	pf("")
+	pf(";;; GenerateHeader [[[")
 	pf("RowsBank BANK")
 	pf("  org $100")
+	pf(";;; GenerateHeader ]]]")
+	pf("")
+	pf("")
 }
-func (par *Parser) Generate() {
+
+func (par *Parser) GenerateStart() {
 	pf := func(f string, args ...any) {
 		fmt.Fprintf(par.w, f+"\n", args...)
+	}
+
+	pf("")
+	pf(";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;")
+	pf("")
+	pf(";;; GenerateStart [[[")
+	pf("start:")
+
+	startFn := &Func{
+		id: "___startFn___",
+	}
+	callMain := &Expr{
+		op: "call",
+		subj: &Expr{
+			vari: "main",
+		},
+	}
+	q := par.EvaluateExpr(startFn, callMain)
+	pf("  seta q%d  ; LO byte of result of main", q+1)
+	pf("  mv a,g    ; exit the program")
+	pf("Fin  FCB 0  ; The end.")
+	pf("")
+	pf(";;; GenerateStart ]]]")
+	pf(";;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;")
+	pf("")
+}
+func (par *Parser) GenerateModule(modnum int) {
+	pf := func(f string, args ...any) {
+		fmt.Fprintf(par.w, f+"\n", args...)
+	}
+
+	if modnum == 0 {
+		par.GenerateHeader()
 	}
 
 	for _, id := range SortedKeys(par.banks) {
@@ -678,6 +825,10 @@ func (par *Parser) Generate() {
 		pf(";")
 		pf(";")
 	}
+
+	if modnum == 0 {
+		par.GenerateStart()
+	}
 }
 
 func (par *Parser) GenerateBody(fn *Func, body []*Stmt) {
@@ -707,12 +858,30 @@ func (par *Parser) GenerateStatement(fn *Func, st *Stmt) {
 		pf("  ; TODO peek")
 	case "poke":
 		pf("  ; TODO poke")
+	case "++":
+		pf("  ; TODO increment")
+	case "--":
+		pf("  ; TODO decrement")
 	case "":
-		pf("  ; TODO no kind")
+		q := par.EvaluateExpr(fn, st.value)
+		if st.assign != "" {
+			varName := par.VarName(fn, st.assign)
+			pf("; assign result to var %q", st.assign)
+			pf("  setw %s", varName)
+			pf("  lda q%d ; assign HI part", q)
+			pf("  mv a,m")
+			pf("  incw")
+			pf("  lda q%d ; assign LO part", q+1)
+			pf("  mv a,m")
+			pf("")
+		}
+		par.QPop()
 	default:
+		// Could either be a function call, or an assignment.
 		pf("  ; TODO kind? %q", st.kind)
 	}
 	pf("  ;;;;;  %#v", *st)
+	pf("  ;;;;;  kind: %q value:  %#v", st.kind, st.value)
 }
 
 func (par *Parser) Parse() {

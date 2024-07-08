@@ -205,6 +205,41 @@ add1m	Macro	_x_, _y_, _z_
 	store1 _z_
 	EndMacro
 
+
+; add2qqq qx, qy, qz
+; Add two 2 bytes numbers using quick registers
+;   qx:qx+1
+;     plus
+;   qy:qy+1
+;     yields
+;   qz:qz+1
+; 
+add3qqq Macro _x_,_y_,_z_
+	setb AddBank
+	ldh _x_+0
+	ldl _y_+0
+	mv m, a     ; add most sig bytes
+	sta _z_+0
+;
+	ldh _x_+1
+	ldl _y_+1
+	mv m, a     ; add least sig bytes
+	sta _z_+1
+;
+	setb CarrySub1Bank
+	mv m, a     ; not-carry of least sig bytes
+	setw @SkipIfNoCarry
+	bnz         ; skip if not-carry
+;
+	ldh _z_+0   ; get carryless sum
+	ldl _z_+1
+	incw        ; apply carry
+	sth _z_+0
+	stl _z_+1   ; save full sum
+@SkipIfNoCarry:
+	EndMacro
+
+
 ; add3qqq qx, qy, qz
 ; Add two 3 bytes numbers using quick registers
 ;   qx:qx+1:qx+2
@@ -265,3 +300,4 @@ add3qqq Macro _x_,_y_,_z_
 	sta _z_
 @NoMidCarry:
 	EndMacro
+
