@@ -133,10 +133,12 @@ Load one of the four primary registers (rr) from quick register (qqqq).
 The mnemonics for the opcodes include the primary register in the name,
 and take the quick register number as an argument.
 
-* `1000qqqq: A` "LDA"
-* `1001qqqq: B` "LDB"
-* `1010qqqq: H` "LDH"
-* `1011qqqq: L` "LDL"
+* `1000qqqq:  LDA`
+* `1001qqqq:  LDB`
+* `1010qqqq:  LDH`
+* `1011qqqq:  LDL`
+
+`/* Update: The rr and qqqq bits will be swapped for easier decoding */`
 
 ### ST (11rrqqqq)
 
@@ -144,10 +146,10 @@ Store one of the four primary registers (rr) to quick register (qqqq).
 The mnemonics for the opcodes include the primary register in the name,
 and take the quick register number as an argument.
 
-* `1100qqqq: A` "STA"
-* `1101qqqq: B` "STB"
-* `1110qqqq: H` "STH"
-* `1111qqqq: L` "STL"
+* `1100qqqq:  STA`
+* `1101qqqq:  STB`
+* `1110qqqq:  STH`
+* `1111qqqq:  STL`
 
 ### SET (000001rr)
 
@@ -155,12 +157,12 @@ Set primary register (rr) to the byte immediately following
 the instruction.  The program counter will naturally be incremented
 by two before fetching the next opcode.
 The mnemonics for the opcodes include the primary register in the name,
-and take the quick register number as an argument.
+and take the immediate byte value as an argument.
 
-* `00000100: A` "SETA"
-* `00000101: B` "SETB"
-* `00000110: H` "SETH"
-* `00000111: L` "SETL"
+* `00000100:  SETA`
+* `00000101:  SETB`
+* `00000110:  SETH`
+* `00000111:  SETL`
 
 Try not to confuse ST with SET instructions, the names look similar!
 
@@ -191,6 +193,10 @@ A standard machine may not have this instruction.
 Branch if A is not zero.  If any of the bits in A are set,
 copy the W register to the program counter.  That is where
 the next instruction will be fetched from.
+
+`/* Update: The mnemonic might be renamed JNZ, jump if A is not zero */`
+
+`/* Update: It may be trivial to add 00001101 JMP: jump always */`
 
 ### STOP (00000000) (optional instruction)
 
